@@ -274,26 +274,27 @@ CREATE TRIGGER `CheckPlayerAgeBeforeUpdate` BEFORE UPDATE ON `Player` FOR EACH R
 END
 $$
 DELIMITER ;
-
--- --------------------------------------------------------
-
--- Prevent multiple teams trigger (patched by KoladePatch)
 DELIMITER $$
-CREATE TRIGGER `prevent_multiple_teams`
-BEFORE INSERT ON `Player`
+CREATE TRIGGER PreventMultipleTeams
+BEFORE INSERT ON Player
 FOR EACH ROW
 BEGIN
+    -- Check if this player already exists on another team
     IF EXISTS (
-        SELECT 1 FROM `Player`
-        WHERE `Name` = NEW.`Name`
-          AND `TeamID` <> NEW.`TeamID`
+        SELECT 1 
+        FROM Player
+        WHERE Name = NEW.Name
+          AND TeamID <> NEW.TeamID
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Player already assigned to another team';
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Error: This player is already assigned to another team.';
     END IF;
-END
-$$
+END$$
+
 DELIMITER ;
 
+
+-- --------------------------------------------------------
 
 --
 -- Table structure for table `PlayerStats`
@@ -507,12 +508,118 @@ CREATE TABLE `teamstatsauto` (
 
 -- --------------------------------------------------------
 
+-- Procedures
+-- 1. Transfer Player and Log Move
+CREATE TABLE IF NOT EXISTS PlayerTransferLog (
+  LogID INT AUTO_INCREMENT PRIMARY KEY,
+  PlayerID INT,
+  OldTeamID INT,
+  NewTeamID INT,
+  ChangeDate DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE PROCEDURE TransferPlayer (
+    IN p_PlayerID INT,
+    IN p_NewTeamID INT
+)
+BEGIN
+    DECLARE oldTeamID INT;
+    SELECT TeamID INTO oldTeamID FROM Player WHERE PlayerID = p_PlayerID;
+
+    UPDATE Player SET TeamID = p_NewTeamID WHERE PlayerID = p_PlayerID;
+
+    INSERT INTO PlayerTransferLog (PlayerID, OldTeamID, NewTeamID)
+    VALUES (p_PlayerID, oldTeamID, p_NewTeamID);
+END$$
+
+-- 2. Record or Update Player Stats
+CREATE PROCEDURE RecordPlayerStats (
+    IN p_GameID INT,
+    IN p_PlayerID INT,
+    IN p_TeamID INT,
+    IN p_PassingYards INT,
+    IN p_RushingYards INT,
+    IN p_ReceivingYards INT,
+    IN p_TDs INT,
+    IN p_Interceptions INT,
+    IN p_Tackles INT,
+    IN p_Sacks INT
+)
+BEGIN
+    IF EXISTS (SELECT 1 FROM PlayerStats WHERE GameID = p_GameID AND PlayerID = p_PlayerID) THEN
+        UPDATE PlayerStats
+        SET PassingYards = COALESCE(p_PassingYards, PassingYards),
+            RushingYards = COALESCE(p_RushingYards, RushingYards),
+            ReceivingYards = COALESCE(p_ReceivingYards, ReceivingYards),
+            TDs = COALESCE(p_TDs, TDs),
+            Interceptions = COALESCE(p_Interceptions, Interceptions),
+            Tackles = COALESCE(p_Tackles, Tackles),
+            Sacks = COALESCE(p_Sacks, Sacks)
+        WHERE GameID = p_GameID AND PlayerID = p_PlayerID;
+    ELSE
+        INSERT INTO PlayerStats (GameID, PlayerID, TeamID, PassingYards, RushingYards, ReceivingYards, TDs, Interceptions, Tackles, Sacks)
+        VALUES (p_GameID, p_PlayerID, p_TeamID, p_PassingYards, p_RushingYards, p_ReceivingYards, p_TDs, p_Interceptions, p_Tackles, p_Sacks);
+    END IF;
+END$$
+
+-- 3. Aggregate Team Stats
+CREATE PROCEDURE GetTeamStats (IN p_TeamID INT)
+BEGIN
+    SELECT 
+        g.SeasonYear,
+        SUM(ps.PassingYards) AS TotalPassingYards,
+        SUM(ps.RushingYards) AS TotalRushingYards,
+        SUM(ps.ReceivingYards) AS TotalReceivingYards,
+        SUM(ps.TDs) AS TotalTouchdowns,
+        SUM(ps.Interceptions) AS TotalInterceptions,
+        SUM(ps.Tackles) AS TotalTackles,
+        SUM(ps.Sacks) AS TotalSacks
+    FROM PlayerStats ps
+    JOIN Game g ON ps.GameID = g.GameID
+    WHERE ps.TeamID = p_TeamID
+    GROUP BY g.SeasonYear;
+END$$
+
+-- 4. Update Team Stats Table from PlayerStats
+CREATE PROCEDURE UpdateTeamStatsFromPlayerStats (IN p_GameID INT, IN p_TeamID INT)
+BEGIN
+    REPLACE INTO TeamStats (GameID, TeamID, TotalPoints, TotalYards, Turnovers, Penalties, TimeOfPossession)
+    SELECT 
+        ps.GameID,
+        ps.TeamID,
+        SUM(ps.TDs),
+        SUM(COALESCE(ps.PassingYards,0) + COALESCE(ps.RushingYards,0) + COALESCE(ps.ReceivingYards,0)),
+        SUM(ps.Interceptions),
+        0,
+        NULL
+    FROM PlayerStats ps
+    WHERE ps.GameID = p_GameID AND ps.TeamID = p_TeamID
+    GROUP BY ps.GameID, ps.TeamID;
+END$$
+
+-- 5. Reset Season Data
+CREATE PROCEDURE ResetSeasonData ()
+BEGIN
+    DELETE FROM PlayerStats;
+    DELETE FROM TeamStats;
+    UPDATE Game SET Attendance = NULL;
+END$$
+
+-- 6. Backup Team Data
+CREATE PROCEDURE BackupTeamTable ()
+BEGIN
+    CREATE TABLE IF NOT EXISTS Team_Backup LIKE Team;
+    INSERT INTO Team_Backup SELECT * FROM Team;
+END$$
+
+DELIMITER ;
+
 --
 -- Structure for view `teamstatsauto`
 --
 DROP TABLE IF EXISTS `teamstatsauto`;
 
-CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `swacfootball`.`teamstatsauto`  AS SELECT `swacfootball`.`playerstats`.`GameID` AS `GameID`, `swacfootball`.`playerstats`.`TeamID` AS `TeamID`, sum(`swacfootball`.`playerstats`.`PassingYards`) AS `TotalPassingYards`, sum(`swacfootball`.`playerstats`.`RushingYards`) AS `TotalRushingYards`, sum(`swacfootball`.`playerstats`.`ReceivingYards`) AS `TotalReceivingYARDS`, sum(`swacfootball`.`playerstats`.`TDs`) AS `TotalTDs`, sum(`swacfootball`.`playerstats`.`Interceptions`) AS `TotalInterceptions`, sum(`swacfootball`.`playerstats`.`Tackles`) AS `TotalTackles`, sum(`swacfootball`.`playerstats`.`Sacks`) AS `TotalSacks` FROM `swacfootball`.`playerstats` GROUP BY `swacfootball`.`playerstats`.`GameID`, `swacfootball`.`playerstats`.`TeamID` ;
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `swacfootball`.`teamstatsauto`  AS SELECT `swacfootball`.`playerstats`.`GameID` AS `GameID`, `swacfootball`.`playerstats`.`TeamID` AS `TeamID`, sum(`swacfootball`.`playerstats`.`PassingYards`) AS `TotalPassingYards`, sum(`swacfootball`.`playerstats`.`RushingYards`) AS `TotalRushingYards`, sum(`swacfootball`.`playerstats`.`ReceivingYards`) AS `TotalReceivingYards`, sum(`swacfootball`.`playerstats`.`TDs`) AS `TotalTDs`, sum(`swacfootball`.`playerstats`.`Interceptions`) AS `TotalInterceptions`, sum(`swacfootball`.`playerstats`.`Tackles`) AS `TotalTackles`, sum(`swacfootball`.`playerstats`.`Sacks`) AS `TotalSacks` FROM `swacfootball`.`playerstats` GROUP BY `swacfootball`.`playerstats`.`GameID`, `swacfootball`.`playerstats`.`TeamID` ;
 
 --
 -- Indexes for dumped tables
@@ -585,7 +692,7 @@ ALTER TABLE `Game`
 -- Constraints for table `Player`
 --
 ALTER TABLE `Player`
-  ADD CONSTRAINT `player_ibfk_1` FOREIGN KEY (`TeamID`) REFERENCES `TEAM` (`TeamID`) ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT `player_ibfk_1` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Constraints for table `PlayerStats`
@@ -612,7 +719,7 @@ ALTER TABLE `Team`
 --
 ALTER TABLE `TeamStats`
   ADD CONSTRAINT `teamstats_ibfk_1` FOREIGN KEY (`GameID`) REFERENCES `Game` (`GameID`),
-  ADD CONSTRAINT `teamstats_ibfk_2` FOREIGN KEY (`TeamID`) REFERENCES `TEAM` (`TeamID`);
+  ADD CONSTRAINT `teamstats_ibfk_2` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`);
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
