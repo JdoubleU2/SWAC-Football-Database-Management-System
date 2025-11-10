@@ -277,6 +277,24 @@ DELIMITER ;
 
 -- --------------------------------------------------------
 
+-- Prevent multiple teams trigger (patched by KoladePatch)
+DELIMITER $$
+CREATE TRIGGER `prevent_multiple_teams`
+BEFORE INSERT ON `Player`
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM `Player`
+        WHERE `Name` = NEW.`Name`
+          AND `TeamID` <> NEW.`TeamID`
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Player already assigned to another team';
+    END IF;
+END
+$$
+DELIMITER ;
+
+
 --
 -- Table structure for table `PlayerStats`
 --
@@ -494,7 +512,7 @@ CREATE TABLE `teamstatsauto` (
 --
 DROP TABLE IF EXISTS `teamstatsauto`;
 
-CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `swacfootball`.`teamstatsauto`  AS SELECT `swacfootball`.`playerstats`.`GameID` AS `GameID`, `swacfootball`.`playerstats`.`TeamID` AS `TeamID`, sum(`swacfootball`.`playerstats`.`PassingYards`) AS `TotalPassingYards`, sum(`swacfootball`.`playerstats`.`RushingYards`) AS `TotalRushingYards`, sum(`swacfootball`.`playerstats`.`ReceivingYards`) AS `TotalReceivingYards`, sum(`swacfootball`.`playerstats`.`TDs`) AS `TotalTDs`, sum(`swacfootball`.`playerstats`.`Interceptions`) AS `TotalInterceptions`, sum(`swacfootball`.`playerstats`.`Tackles`) AS `TotalTackles`, sum(`swacfootball`.`playerstats`.`Sacks`) AS `TotalSacks` FROM `swacfootball`.`playerstats` GROUP BY `swacfootball`.`playerstats`.`GameID`, `swacfootball`.`playerstats`.`TeamID` ;
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `swacfootball`.`teamstatsauto`  AS SELECT `swacfootball`.`playerstats`.`GameID` AS `GameID`, `swacfootball`.`playerstats`.`TeamID` AS `TeamID`, sum(`swacfootball`.`playerstats`.`PassingYards`) AS `TotalPassingYards`, sum(`swacfootball`.`playerstats`.`RushingYards`) AS `TotalRushingYards`, sum(`swacfootball`.`playerstats`.`ReceivingYards`) AS `TotalReceivingYARDS`, sum(`swacfootball`.`playerstats`.`TDs`) AS `TotalTDs`, sum(`swacfootball`.`playerstats`.`Interceptions`) AS `TotalInterceptions`, sum(`swacfootball`.`playerstats`.`Tackles`) AS `TotalTackles`, sum(`swacfootball`.`playerstats`.`Sacks`) AS `TotalSacks` FROM `swacfootball`.`playerstats` GROUP BY `swacfootball`.`playerstats`.`GameID`, `swacfootball`.`playerstats`.`TeamID` ;
 
 --
 -- Indexes for dumped tables
@@ -567,7 +585,7 @@ ALTER TABLE `Game`
 -- Constraints for table `Player`
 --
 ALTER TABLE `Player`
-  ADD CONSTRAINT `player_ibfk_1` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`) ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT `player_ibfk_1` FOREIGN KEY (`TeamID`) REFERENCES `TEAM` (`TeamID`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Constraints for table `PlayerStats`
@@ -594,7 +612,7 @@ ALTER TABLE `Team`
 --
 ALTER TABLE `TeamStats`
   ADD CONSTRAINT `teamstats_ibfk_1` FOREIGN KEY (`GameID`) REFERENCES `Game` (`GameID`),
-  ADD CONSTRAINT `teamstats_ibfk_2` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`);
+  ADD CONSTRAINT `teamstats_ibfk_2` FOREIGN KEY (`TeamID`) REFERENCES `TEAM` (`TeamID`);
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
