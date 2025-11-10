@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost
--- Generation Time: Nov 06, 2025 at 10:40 PM
+-- Generation Time: Nov 10, 2025 at 11:57 PM
 -- Server version: 10.4.28-MariaDB
 -- PHP Version: 8.2.4
 
@@ -18,7 +18,7 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- Database: `SWACFootball`
+-- Database: `SWACDatabase`
 --
 
 -- --------------------------------------------------------
@@ -275,10 +275,7 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
-CREATE TRIGGER PreventMultipleTeams
-BEFORE INSERT ON Player
-FOR EACH ROW
-BEGIN
+CREATE TRIGGER `PreventMultipleTeams` BEFORE INSERT ON `Player` FOR EACH ROW BEGIN
     -- Check if this player already exists on another team
     IF EXISTS (
         SELECT 1 
@@ -289,10 +286,9 @@ BEGIN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'Error: This player is already assigned to another team.';
     END IF;
-END$$
-
+END
+$$
 DELIMITER ;
-
 
 -- --------------------------------------------------------
 
@@ -373,6 +369,20 @@ INSERT INTO `PlayerStats` (`StatID`, `GameID`, `PlayerID`, `TeamID`, `PassingYar
 (1202, 12, 305, 6, NULL, 884, NULL, 9, NULL, NULL, NULL),
 (1203, 13, 311, 6, NULL, NULL, 457, 7, NULL, NULL, NULL),
 (1204, 14, 315, 6, NULL, NULL, NULL, NULL, 4, 66, NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `PlayerTransferLog`
+--
+
+CREATE TABLE `PlayerTransferLog` (
+  `LogID` int(11) NOT NULL,
+  `PlayerID` int(11) DEFAULT NULL,
+  `OldTeamID` int(11) DEFAULT NULL,
+  `NewTeamID` int(11) DEFAULT NULL,
+  `ChangeDate` datetime DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
 
@@ -488,139 +498,6 @@ CREATE TABLE `TeamStats` (
   `TimeOfPossession` varchar(20) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
--- --------------------------------------------------------
-
---
--- Stand-in structure for view `teamstatsauto`
--- (See below for the actual view)
---
-CREATE TABLE `teamstatsauto` (
-`GameID` int(11)
-,`TeamID` int(11)
-,`TotalPassingYards` decimal(32,0)
-,`TotalRushingYards` decimal(32,0)
-,`TotalReceivingYards` decimal(32,0)
-,`TotalTDs` decimal(32,0)
-,`TotalInterceptions` decimal(32,0)
-,`TotalTackles` decimal(32,0)
-,`TotalSacks` decimal(32,0)
-);
-
--- --------------------------------------------------------
-
--- Procedures
--- 1. Transfer Player and Log Move
-CREATE TABLE IF NOT EXISTS PlayerTransferLog (
-  LogID INT AUTO_INCREMENT PRIMARY KEY,
-  PlayerID INT,
-  OldTeamID INT,
-  NewTeamID INT,
-  ChangeDate DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE PROCEDURE TransferPlayer (
-    IN p_PlayerID INT,
-    IN p_NewTeamID INT
-)
-BEGIN
-    DECLARE oldTeamID INT;
-    SELECT TeamID INTO oldTeamID FROM Player WHERE PlayerID = p_PlayerID;
-
-    UPDATE Player SET TeamID = p_NewTeamID WHERE PlayerID = p_PlayerID;
-
-    INSERT INTO PlayerTransferLog (PlayerID, OldTeamID, NewTeamID)
-    VALUES (p_PlayerID, oldTeamID, p_NewTeamID);
-END$$
-
--- 2. Record or Update Player Stats
-CREATE PROCEDURE RecordPlayerStats (
-    IN p_GameID INT,
-    IN p_PlayerID INT,
-    IN p_TeamID INT,
-    IN p_PassingYards INT,
-    IN p_RushingYards INT,
-    IN p_ReceivingYards INT,
-    IN p_TDs INT,
-    IN p_Interceptions INT,
-    IN p_Tackles INT,
-    IN p_Sacks INT
-)
-BEGIN
-    IF EXISTS (SELECT 1 FROM PlayerStats WHERE GameID = p_GameID AND PlayerID = p_PlayerID) THEN
-        UPDATE PlayerStats
-        SET PassingYards = COALESCE(p_PassingYards, PassingYards),
-            RushingYards = COALESCE(p_RushingYards, RushingYards),
-            ReceivingYards = COALESCE(p_ReceivingYards, ReceivingYards),
-            TDs = COALESCE(p_TDs, TDs),
-            Interceptions = COALESCE(p_Interceptions, Interceptions),
-            Tackles = COALESCE(p_Tackles, Tackles),
-            Sacks = COALESCE(p_Sacks, Sacks)
-        WHERE GameID = p_GameID AND PlayerID = p_PlayerID;
-    ELSE
-        INSERT INTO PlayerStats (GameID, PlayerID, TeamID, PassingYards, RushingYards, ReceivingYards, TDs, Interceptions, Tackles, Sacks)
-        VALUES (p_GameID, p_PlayerID, p_TeamID, p_PassingYards, p_RushingYards, p_ReceivingYards, p_TDs, p_Interceptions, p_Tackles, p_Sacks);
-    END IF;
-END$$
-
--- 3. Aggregate Team Stats
-CREATE PROCEDURE GetTeamStats (IN p_TeamID INT)
-BEGIN
-    SELECT 
-        g.SeasonYear,
-        SUM(ps.PassingYards) AS TotalPassingYards,
-        SUM(ps.RushingYards) AS TotalRushingYards,
-        SUM(ps.ReceivingYards) AS TotalReceivingYards,
-        SUM(ps.TDs) AS TotalTouchdowns,
-        SUM(ps.Interceptions) AS TotalInterceptions,
-        SUM(ps.Tackles) AS TotalTackles,
-        SUM(ps.Sacks) AS TotalSacks
-    FROM PlayerStats ps
-    JOIN Game g ON ps.GameID = g.GameID
-    WHERE ps.TeamID = p_TeamID
-    GROUP BY g.SeasonYear;
-END$$
-
--- 4. Update Team Stats Table from PlayerStats
-CREATE PROCEDURE UpdateTeamStatsFromPlayerStats (IN p_GameID INT, IN p_TeamID INT)
-BEGIN
-    REPLACE INTO TeamStats (GameID, TeamID, TotalPoints, TotalYards, Turnovers, Penalties, TimeOfPossession)
-    SELECT 
-        ps.GameID,
-        ps.TeamID,
-        SUM(ps.TDs),
-        SUM(COALESCE(ps.PassingYards,0) + COALESCE(ps.RushingYards,0) + COALESCE(ps.ReceivingYards,0)),
-        SUM(ps.Interceptions),
-        0,
-        NULL
-    FROM PlayerStats ps
-    WHERE ps.GameID = p_GameID AND ps.TeamID = p_TeamID
-    GROUP BY ps.GameID, ps.TeamID;
-END$$
-
--- 5. Reset Season Data
-CREATE PROCEDURE ResetSeasonData ()
-BEGIN
-    DELETE FROM PlayerStats;
-    DELETE FROM TeamStats;
-    UPDATE Game SET Attendance = NULL;
-END$$
-
--- 6. Backup Team Data
-CREATE PROCEDURE BackupTeamTable ()
-BEGIN
-    CREATE TABLE IF NOT EXISTS Team_Backup LIKE Team;
-    INSERT INTO Team_Backup SELECT * FROM Team;
-END$$
-
-DELIMITER ;
-
---
--- Structure for view `teamstatsauto`
---
-DROP TABLE IF EXISTS `teamstatsauto`;
-
-CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `swacfootball`.`teamstatsauto`  AS SELECT `swacfootball`.`playerstats`.`GameID` AS `GameID`, `swacfootball`.`playerstats`.`TeamID` AS `TeamID`, sum(`swacfootball`.`playerstats`.`PassingYards`) AS `TotalPassingYards`, sum(`swacfootball`.`playerstats`.`RushingYards`) AS `TotalRushingYards`, sum(`swacfootball`.`playerstats`.`ReceivingYards`) AS `TotalReceivingYards`, sum(`swacfootball`.`playerstats`.`TDs`) AS `TotalTDs`, sum(`swacfootball`.`playerstats`.`Interceptions`) AS `TotalInterceptions`, sum(`swacfootball`.`playerstats`.`Tackles`) AS `TotalTackles`, sum(`swacfootball`.`playerstats`.`Sacks`) AS `TotalSacks` FROM `swacfootball`.`playerstats` GROUP BY `swacfootball`.`playerstats`.`GameID`, `swacfootball`.`playerstats`.`TeamID` ;
-
 --
 -- Indexes for dumped tables
 --
@@ -656,6 +533,12 @@ ALTER TABLE `PlayerStats`
   ADD KEY `TeamID` (`TeamID`);
 
 --
+-- Indexes for table `PlayerTransferLog`
+--
+ALTER TABLE `PlayerTransferLog`
+  ADD PRIMARY KEY (`LogID`);
+
+--
 -- Indexes for table `Schedule`
 --
 ALTER TABLE `Schedule`
@@ -678,6 +561,16 @@ ALTER TABLE `TeamStats`
   ADD KEY `TeamID` (`TeamID`);
 
 --
+-- AUTO_INCREMENT for dumped tables
+--
+
+--
+-- AUTO_INCREMENT for table `PlayerTransferLog`
+--
+ALTER TABLE `PlayerTransferLog`
+  MODIFY `LogID` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- Constraints for dumped tables
 --
 
@@ -693,33 +586,6 @@ ALTER TABLE `Game`
 --
 ALTER TABLE `Player`
   ADD CONSTRAINT `player_ibfk_1` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`) ON DELETE CASCADE ON UPDATE CASCADE;
-
---
--- Constraints for table `PlayerStats`
---
-ALTER TABLE `PlayerStats`
-  ADD CONSTRAINT `playerstats_ibfk_1` FOREIGN KEY (`GameID`) REFERENCES `Game` (`GameID`),
-  ADD CONSTRAINT `playerstats_ibfk_2` FOREIGN KEY (`PlayerID`) REFERENCES `Player` (`PlayerID`),
-  ADD CONSTRAINT `playerstats_ibfk_3` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`);
-
---
--- Constraints for table `Schedule`
---
-ALTER TABLE `Schedule`
-  ADD CONSTRAINT `schedule_ibfk_1` FOREIGN KEY (`GameID`) REFERENCES `Game` (`GameID`);
-
---
--- Constraints for table `Team`
---
-ALTER TABLE `Team`
-  ADD CONSTRAINT `team_ibfk_1` FOREIGN KEY (`CoachID`) REFERENCES `Coach` (`CoachID`);
-
---
--- Constraints for table `TeamStats`
---
-ALTER TABLE `TeamStats`
-  ADD CONSTRAINT `teamstats_ibfk_1` FOREIGN KEY (`GameID`) REFERENCES `Game` (`GameID`),
-  ADD CONSTRAINT `teamstats_ibfk_2` FOREIGN KEY (`TeamID`) REFERENCES `Team` (`TeamID`);
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
