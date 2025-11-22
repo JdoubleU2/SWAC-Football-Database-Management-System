@@ -25,6 +25,7 @@ This project demonstrates advanced database design principles, complex SQL queri
 - **[Hemnarayan Sah](https://github.com/hemzz2020)** (hemzz2020)
 - **[Khaliyl Peterson](https://github.com/KhaliylP)** (KhaliylP)
 - **[Kolade Shofoluwe](https://github.com/koladeshofoluwe)** (koladeshofoluwe)
+- **[Arrion Knight](https://github.com/arrionknight)** (arrionknight)
 
 ## ✨ Features
 
@@ -219,3 +220,4 @@ For questions or issues, please contact the team members through their GitHub pr
 **Institution**: Prairie View A&M University  
 **Semester**: Fall 2025  
 **Project Name**: Row6Col7 - SWAC Football Database
+
